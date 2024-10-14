@@ -1,0 +1,8 @@
+name: "My R-Project"
+navbar:
+  title: "R-Project"
+  left:
+    - text: "Home"
+      href: index.html
+    - text: "About"
+      href: about.html

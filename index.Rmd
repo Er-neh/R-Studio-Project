@@ -1,28 +1,6 @@
 ---
-title: "Understanding Birmingham's Climate: Analysis, Insights, and Predictions"
-author: "Emeka Chike-Eneh" 
-date: "2024-04-15"
-output:
-  pdf_document: 
-    toc: true
-    toc_depth: 4 
-    number_sections: true
-  word_document:
-    toc: true
-  html_document:
-    toc: true
-    number_sections: true
+title: "R-Project"
 ---
-
-
-
-
-
-
-
-
-
-
 
 ```{r}
 # Importing the library
