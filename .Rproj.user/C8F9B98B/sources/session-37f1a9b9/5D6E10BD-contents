@@ -1,0 +1,1600 @@
+---
+title: "R-Project"
+---
+
+```{r}
+# Importing the library
+
+library(lubridate)
+library(stringr)
+library(tidyverse)
+library(reshape2)
+library(psych)
+library(caTools)
+library(e1071)
+library(lmtest)
+library(rpart)
+library(corrplot)
+library(randomForest)
+library(Hmisc)
+library(zoo)
+library(forecast)
+library(tseries)
+```
+
+## Importing The Dataset
+
+```{r}
+df <- read.csv("C:/Users/Emeka/Downloads/WRFdata_May2018.csv")
+nrow(df)
+```
+
+```{r}
+# Selecting the rows that point to the location necessary for this analysis
+new_df <- df[c(1, 3423), ]
+
+# Replacing a wrong column name with the right one
+names(new_df)[names(new_df) == 'X.2225'] <- 'X31.05.2018.21.00'
+
+```
+
+```{r}
+# Deleting the Longitude and Latitude Columns
+new_df <- new_df[-c(1,2)]
+
+```
+
+
+
+```{r}
+extract_datetime <- function(header) {
+  match <- str_extract(header, "\\d{2}.\\d{2}.\\d{4}.\\d{2}.\\d{2}")
+  return(ifelse(is.na(match), "", match))
+}
+```
+
+
+
+
+## Implementing sapply
+
+This function was then applied using the “sapply” function on all the column names to extract all the datetimes.
+
+```{r}
+extracted_datetime <- sapply(colnames(new_df), extract_datetime)
+```
+
+The extracted datetime characters were then then stored in a separate data frame. The resulting blank rows were deleted
+
+```{r}
+# Creating a separate dataframe for the extracted datetime
+datetime_df <- data.frame(datetime = extracted_datetime)
+datetime_df1 <- data.frame(data = datetime_df)
+
+
+# Handling the blank rows
+datetime_df <- datetime_df[!apply(is.na(datetime_df) | datetime_df == "", 1, all), ]
+datetime_df1 <- data.frame(data = datetime_df)
+
+head(datetime_df1)
+
+```
+
+
+
+```{r}
+#Creating a copy of our dataframe
+newdf_copy <- new_df
+
+# Replacing the column headers with the header row
+header_row_index <- 1
+colnames(newdf_copy) <- unlist(newdf_copy[header_row_index, ])
+newdf_copy <- newdf_copy[-header_row_index, ] # Delete the header row
+
+
+```
+
+
+
+
+
+## Handling Missing Values
+
+
+
+```{r}
+
+# Handling the NA's in the column headers
+num_repeats <- ceiling(ncol(newdf_copy) / 10)
+new_names <- paste0(rep(c("TSK", "PSFC", "U10", "V10", "Q2", "RAINC", "RAINNC", "SNOW", "TSLB", "SMOIS"), times = num_repeats))
+colnames(newdf_copy) <- new_names
+
+```
+
+
+
+
+
+The dataset was then split into smaller data frames of 10 columns each. All these individual data frames were then stored as a list. This list of separate data frames was then merged to form a singular data frame consisting of 248 rows and 10 columns
+
+```{r}
+
+#Splitting the Dataframe into separate dataframes
+split_dfs <- split.default(newdf_copy, rep(1:(ncol(newdf_copy) %/% 10), each = 10))
+View(split_dfs)
+# Converting all column format to the numeric format
+for (i in seq_along(split_dfs)) {
+  split_dfs[[i]] <- lapply(split_dfs[[i]], as.numeric)
+}
+
+# Merging the split dataframes
+merged_df <- bind_rows(split_dfs)
+glimpse(merged_df)
+
+
+
+
+```
+
+
+
+
+## Handling the Missing Values in the Columns
+
+  To address the missing values in this merged dataset, a for loop was created. The function of this loop was to fill the missing values with the average of the top and bottom values of the column. This ensures a fair and non-biased imputation method. The final data frame is then merged with the extracted datetime data frame to get the final dataset that would be used for analysis and modelling
+
+```{r}
+
+# Function to fill the missing values with the average of the top and bottom values of the column
+fill_na_with_avg <- function(x) {
+  for (i in 2:(length(x) - 1)) {
+    if (is.na(x[i])) {
+      x[i] <- mean(c(x[i - 1], x[i + 1]), na.rm = TRUE)
+    }
+  } 
+  return(x)
+}
+
+merged_df <- apply(merged_df,2,fill_na_with_avg)
+
+
+
+```
+
+
+
+
+## Data Validation
+
+  Checking the integrity, accuracy, and consistency of data is a crucial aspect of the data cleaning process, known as data validation. The main aim of data validation is to identify and rectify errors, anomalies, and inconsistencies in the dataset, which ultimately enhances the overall reliability and quality of the data used for analysis or modelling purposes. Data validation was carried out in the dataset, this involved transforming the class of the numeric variables to numeric format and the datetime column to “POSIXct” format.
+
+```{r}
+# Joining the datetime dataframe with the merged dataframe
+data_weather <- cbind(merged_df, datetime_df1 )
+glimpse(data_weather)
+# Changing the datetime column name with its appropriate name
+data_weather$DATETIME <- data_weather$data
+data_weather <- select(data_weather, -data)
+
+
+# Convert the datetime column to POSIXct format
+format_string <- "%d.%m.%Y.%H.%M" 
+data_weather$DATETIME<- as.POSIXct(data_weather$DATETIME, format = format_string)
+
+
+head(data_weather)
+```
+
+
+
+
+### Calculating Wind Speed
+
+Since Wind Speed would be crucial for the analysis of Birmingham’s weather, it was calculated from the X and Y component of wind available in the dataset.
+
+```{r}
+data_weather$WIND_SPEED <- round(sqrt(data_weather$U10^2 + data_weather$V10^2), 2)
+```
+
+
+
+
+# Exploratory Data Analysis
+
+```{r}
+str(data_weather)
+```
+
+The output above gives the structure of the dataset displaying the format of all the variables
+
+
+
+
+
+The code below gives out the summary statistics of the dataset. Displaying the minimum, maximum, mean, median, 1st quartile and 3rd quartile distribution of all the columns in the dataset
+
+```{r}
+summary(data_weather)
+```
+
+
+```{r}
+head(data_weather) #Displays first 6 rows
+```
+
+
+
+
+
+
+This gives a brief description of the dataset showing values like the standard deviation, etc
+
+```{r}
+describe(data_weather)
+```
+
+
+```{r}
+# Checking for duplicate values
+duplicated(data_weather)
+```
+
+The output above means that there are no duplicated values in the dataset
+
+
+
+
+
+```{r}
+pairs(data_weather)
+```
+
+The output of the image above shows a pairplot. A pairplot is a type of visualization in data analysis that displays pairwise relationships between variables in a dataset. It is typically used to explore the relationships between multiple numerical variables and identify patterns or correlations between them
+
+
+
+
+
+
+
+
+```{r}
+ggplot(data_weather, aes(x = TSK)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Surface Temperature", x = "Surface Temperature", y = "Frequency")
+
+```
+
+```{r}
+# Checking the skewness and Kurtosis of TSK
+print(paste("The value of the skewness is: ", skewness(data_weather$TSK)))
+kurtosis_TSK<- kurtosis(data_weather$TSK, na.rm = TRUE)
+print(paste("The value of the kurtosis is:", kurtosis_TSK))
+```
+
+From the result above it can be seen that the distribution is moderately right skewed and the kurtosis is platykurtic.
+
+
+
+
+
+```{r}
+ggplot(data_weather, aes(x = PSFC)) +
+  geom_histogram(binwidth = 30, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Surface Pressure", x = "Surface Pressure", y = "Frequency")
+```
+
+```{r}
+# Checking the skewness and Kurtosis of PSFC
+print(paste("The value of the skewness is: ", skewness(data_weather$PSFC)))
+kurtosis_PSFC<- kurtosis(data_weather$PSFC, na.rm = TRUE)
+print(paste("The value of the kurtosis is:", kurtosis_PSFC))
+```
+
+From the distribution of the surface pressure, it can be seen that it is left skewed and it has a low kurtosis.
+
+
+
+
+
+```{r}
+ggplot(data_weather, aes(x = WIND_SPEED)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Wind Speed", x = "Wind Speed", y = "Frequency")
+```
+
+
+
+
+```{r}
+# Checking the skewness and Kurtosis of Wind Speed
+print(paste("The value of the skewness is: ", skewness(data_weather$WIND_SPEED)))
+kurtosis_WINDSPEED<- kurtosis(data_weather$WIND_SPEED, na.rm = TRUE)
+print(paste("The value of the kurtosis is:", kurtosis_WINDSPEED))
+```
+
+From the above, the distribution is right skewed with a low kurtosis
+
+
+
+
+
+```{r}
+ggplot(data_weather, aes(x = RAINNC)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  labs(title = "Non-convective Rain", x = "Non-Convective Rain", y = "Frequency")
+```
+
+```{r}
+# Checking the skewness and Kurtosis of RAINNC
+print(paste("The value of the skewness is: ", skewness(data_weather$RAINNC)))
+kurtosis_RAINNC<- kurtosis(data_weather$RAINNC, na.rm = TRUE)
+print(paste("The value of the kurtosis is:", kurtosis_RAINNC))
+```
+
+From the distribution, it can be seen that it is highly right skewed with a very high kurtosis.
+
+
+
+
+
+
+```{r}
+ggplot(data_weather, aes(x = TSLB)) +
+  geom_histogram(binwidth = 1, fill = "skyblue", color = "black") +
+  labs(title = "Soil Temperature", x = "Soil Temperature", y = "Frequency")
+```
+
+```{r}
+# Checking the skewness and Kurtosis of TSLB
+print(paste("The value of the skewness is: ", skewness(data_weather$TSLB)))
+kurtosis_TSLB<- kurtosis(data_weather$TSLB, na.rm = TRUE)
+print(paste("The value of the kurtosis is:", kurtosis_TSLB))
+```
+
+From the distribution above, it shows it is moderately right skewed with low kurtosis
+
+
+
+
+
+```{r}
+ggplot(data_weather, aes(x = Q2)) +
+  geom_histogram(binwidth = 0.1, fill = "skyblue", color = "black") +
+  labs(title = "2-meter specific humidity", x = "2-meter specific humidity", y = "Frequency")
+```
+
+```{r}
+# Checking the skewness and Kurtosis of TSK
+print(paste("The value of the skewness is: ", skewness(data_weather$Q2)))
+kurtosis_Q2<- kurtosis(data_weather$Q2, na.rm = TRUE)
+print(paste("The value of the kurtosis is:", kurtosis_Q2))
+```
+
+Here, although the distribution can not be visually recognised, from the skewness and kurtosis calculations, we can say that the distribution is moderately right skewed with a relatively low kurtosis
+
+
+
+
+
+
+
+
+```{r}
+#Boxplot for Skin temperature
+ggplot(data_weather, aes(y = TSK)) +
+  geom_boxplot(outlier.color = 'red') +
+  labs(title = "Skin Temperature") 
+```
+
+```{r}
+#Boxplot for surface pressure
+
+ggplot(data_weather, aes(y = PSFC)) +
+  geom_boxplot(outlier.color = "red") +
+  labs(title = "Surface Pressure")
+```
+
+```{r}
+#Print the outliers
+Outlier_Psfc <- data_weather$PSFC
+z_scores <- scale(Outlier_Psfc)
+threshold <- 2
+outliers <- Outlier_Psfc[abs(z_scores) > threshold]
+print(outliers)
+```
+
+```{r}
+#Boxplot for 2-meter specific humidity
+ggplot(data_weather, aes(y = Q2)) +
+  geom_boxplot(outlier.colour = "red") +
+  labs(title = "2-meter specific humidity")
+```
+
+```{r}
+ggplot(data_weather, aes(y = WIND_SPEED)) +
+  geom_boxplot(outlier.colour = "red") +
+  labs(title = "Wind Speed")
+```
+
+```{r}
+#Print the outliers
+Outlier_Wind <- data_weather$WIND_SPEED
+z_scores <- scale(Outlier_Wind)
+threshold <- 2
+outliers <- Outlier_Wind[abs(z_scores) > threshold]
+print(outliers)
+```
+
+```{r}
+ggplot(data_weather, aes(y = TSLB)) +
+  geom_boxplot(outlier.colour = "red") +
+  labs(title = "Soil Temperature")
+```
+
+Upon careful inspection of the outliers and comparing it to our available dataset, it was deduced that the outliers are valid data points. Outliers don't necessarily mean errors. In some cases, they might represent genuine but rare events or observations within the data set.
+
+
+
+
+
+
+## LinePlots
+
+Line plots are a basic tool for visualising data trends across a continuous variable. By displaying how a specific variable changes over time or different categories, line plots provide a clear and concise method for communicating complex information effectively.
+
+```{r}
+
+#Lineplot to see the trend of  the Wind Speed variable over 30 days
+ggplot(data_weather, aes(x = DATETIME, y = WIND_SPEED)) +
+  geom_line(color = 'blue', linewidth = 1.0) +
+  labs(x = "Datetime", y = "Wind Speed") +
+  ggtitle("Trend of Wind Speed Over Time")
+```
+
+```{r}
+#Lineplot to see the trend of  Surface temperature variable over 30 days
+ggplot(data_weather, aes(x = DATETIME, y = TSK)) +
+  geom_line(color = 'blue', linewidth = 1.0) +
+  labs(x = "Datetime", y = "Surface temperature") +
+  ggtitle("Trend of Surface Temperature Over Time")
+```
+
+```{r}
+#Lineplot to see the trend of  the Surface pressure variable over 30 days
+ggplot(data_weather, aes(x = DATETIME, y = PSFC)) +
+  geom_line(color = 'blue', linewidth = 1.0) +
+  labs(x = "Datetime", y = "Surface pressure") +
+  ggtitle("Trend of Surface pressure Over Time")
+```
+
+```{r}
+#Lineplot to see the trend of  the Non-convective rain variable over 30 days
+ggplot(data_weather, aes(x = DATETIME, y = RAINNC)) +
+  geom_line(color = 'blue', linewidth = 1.0) +
+  labs(x = "Datetime", y = "Non-convective rain") +
+  ggtitle("Trend of Non-convective rain Over Time")
+```
+
+```{r}
+#Lineplot to see the trend of  2-meter specific humidity variable over 30 days
+ggplot(data_weather, aes(x = DATETIME, y = Q2)) +
+  geom_line(color = 'blue', linewidth = 1.0) +
+  labs(x = "Datetime", y = "2-meter specific humidity") +
+  ggtitle("Trend of 2-meter specific humidity Over Time")
+```
+
+
+
+
+
+
+
+# Statistical Analysis
+
+## Research Question 1: Univariate analysis
+
+What is the average distribution of surface temperature across the dataset?
+
+Finding the distribution of the surface temperature across a thirty-day time period helps to determine a baseline.
+
+1a.) Null Hypothesis (H0) : There is no significant difference in surface temperature
+
+1b.) Alternative Hypothesis (H1) : Surface temperature significantly differs from the mean temperature.
+
+```{r}
+#Showing the summary statistics
+summary(data_weather$TSK)
+```
+
+The result above shows the summary description of the surface temperature variable. It shows that the mean surface temperature across the 30 day time period was 289.4
+
+
+
+
+
+
+
+```{r}
+#Plotting the Histogram
+ggplot(data_weather, aes(x = TSK)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Surface Temperature", x = "Surface Temperature", y = "Frequency")
+```
+
+The histogram shows the visual distribution of the Surface temperature variable. It shows the peak value of the surface at around the 289 mark. The distribution is right skewed.
+
+
+
+
+
+
+### Hypothesis Test
+
+```{r}
+#Getting a reference value
+reference_value <- mean(data_weather$TSK)
+
+#Performing one-sample t-test
+t_testResult <- t.test(data_weather$TSK, mu = reference_value)
+print(t_testResult)
+
+```
+
+The result above shows a p-value that is equal to 1. Since it is greater than 0.05, this indicates that there is no evidence to reject the null hypothesis. In other words, the test does not find any significant difference or effect. The null hypothesis being that there is no significant difference in the mean surface temperature. We then accept the null hypothesis.
+
+
+
+
+
+```{r}
+#Test for Normality
+shapiro.test(data_weather$TSK)
+```
+
+From the above, a p-value less than 0.05 suggests that we can confidently reject the null hypothesis. It means there's no evidence to suggest the data deviates from normality. In this case, the data shows a non-normal distribution.
+
+
+
+
+
+
+## Research Question 2 Bivariate Analysis
+
+How does Wind Speed have an influence on the surface pressure?
+
+2a.) Null Hypothesis (H0): There is no relationship between wind speed and surface pressure.
+
+2b.) Alternative Hypothesis (H1): There is a relationship between wind speed and surface pressure.
+
+The two variables needed are Wind Speed and Surface Pressure
+
+```{r}
+#First a scatterplot to show the relationship
+ggplot(data_weather, aes(x = WIND_SPEED, y = PSFC)) +
+  geom_point(alpha = 5) +
+  labs(x = "Wind Speed", y = "PSFC") +
+  ggtitle("Scatterplot of Wind Speed vs Surface Pressure")
+
+```
+
+  To determine the correlation coefficient that would be used to check the relationship, the distribution of the two variables have to be checked to determine whether the Pearson, Spearman or Kendall correlation function would be used. Although they perform similar tasks they have differing assumptions.
+
+When analyzing the relationship between two variables, Pearson correlation is best suited for assessing linear relationships between continuous variables that follow a normal distribution. On the other hand, Spearman correlation is more appropriate for assessing monotonic relationships, especially when the relationship is nonlinear or the data are not normally distributed.
+
+```{r}
+#Test for normality for Wind Speed
+shapiro.test(data_weather$WIND_SPEED)
+```
+
+```{r}
+#Test for normality for Surface Pressure
+shapiro.test(data_weather$PSFC)
+```
+
+From the output above the p-value from both normality tests is seen to be less than 0.05. This shows that the distribution is not normally distributed. This then eliminates the need for pearson correlation coefficient. A non parametric test called "Spearman" correlation would be used.
+
+
+
+
+
+
+
+```{r}
+#Spearman correlation
+cor(data_weather$WIND_SPEED, data_weather$PSFC, method = "spearman")
+```
+
+```{r}
+#Spearman correlation
+rcorr(data_weather$WIND_SPEED, data_weather$PSFC, type = 'spearman')
+```
+
+From the result of the correlation tests above, it shows a weak negative correlation between the two variables.
+
+
+
+
+
+
+
+```{r}
+#Spearman correlation using corr.test
+cor.test(data_weather$WIND_SPEED, data_weather$PSFC, method = 'spearman')
+```
+
+The p-value from this test is less than 0.05. This indicates that the null hypothesis, which states that there is no correlation between the two variables, can be rejected at a confidence level of 95%. Therefore, it can be concluded that there exists a statistically significant association between the two variables.
+
+
+
+
+
+
+
+
+## Research Question 3 Multivariate Analysis
+
+How do skin temperature, surface pressure and specific humidity collectively influence convective rainfall and what is the nature of their combined effects? Is there evidence of collaborative or opposing relationships among these factors?
+
+3a.) Null Hypothesis: There is no significant relationship between the combined effects of skin temperature, surface pressure and specific humidity on convective rainfall.
+
+3b.) Alternative Hypothesis: There is a significant relationship between the combined effects of skin temperature, surface pressure and specific humidity on convective rainfall
+
+```{r}
+#Plotting a pairwise scatterplot to show relationship between the variables
+pairs(data_weather[, c("TSK", "PSFC", "Q2", "RAINC")])
+```
+
+The plot above shows the pair relationship between each variable using a scatter plot.
+
+
+
+
+
+
+
+
+```{r}
+#Using a multiple regression model
+Multi_model <- lm(RAINC ~ TSK + PSFC + Q2, data = data_weather)
+summary(Multi_model)
+
+
+```
+
+From the result of the regression test,
+
+1.) A positive coefficient for Q2 suggests a positive relationship with Rainc (higher humidity leads to higher rain).
+
+2.) A negative coefficient for PSFC and TSK indicates a negative relationship (higher pressure and higher temperature leads to lower rain).
+
+But overall, the p-value is seen to be less than 0.05. Therefore, the null hypothesis is rejected. This then signifies that there is a significant relationship between the combined factors.
+
+```{r}
+# Heatmap for Multivariate analysis
+correlation_matrix <- cor(data_weather[c("TSK","PSFC", "Q2","RAINC")])
+corrplot(correlation_matrix, method = "color")
+```
+
+The heat map shows the positive or negative correlation between each variable
+
+
+
+
+
+
+
+### Visualisations
+
+```{r}
+plot(Multi_model)
+```
+
+1.) Residuals vs Fitted: This plot verifys the assumptions of linearity. When the residuals exhibit an equal spread around the horizontal line without noticeable patterns, it strongly implies the presence of a linear relationship.
+
+2.) Normal Q-Q: This plot verifys the assumption of normality regarding residuals. If the majority of residuals closely adhere to the straight dashed line, then the assumption is satisfied.
+
+3.) Scale-Location: This plot is utilized to examine the homoscedasticity of residuals, ensuring that their variance remains constant. When the residuals are evenly distributed along the straight line, it confirms homoscedasticity. It suggests that the model meets an important assumption of linear regression and doesn't exhibit a systematic bias in its residuals.
+
+Residuals vs Leverage: This visualization is employed to detect any influential values present within the dataset.
+
+
+
+
+
+
+### Non-Parametric Tests
+
+Generalized Additive Models (GAMs): GAMs allow for non-linear relationships between predictor variables and the outcome variable by using flexible spline functions. This can capture non-linear patterns in the data more effectively than traditional linear regression models.
+
+```{r}
+library(gam)
+model_gam <- gam(RAINC ~ s(TSK) + s(PSFC) + s(Q2), data = data_weather)
+
+# Summary of the GAM
+summary(model_gam)
+```
+
+
+Polynomial regression is a statistical method employed to depict the connection between a dependent variable and one or more independent variables. In contrast to linear regression, which presumes a linear relationship between variables, polynomial regression accommodates curved relationships by applying a polynomial equation to the dataset.
+
+```{r}
+#Polynomial Regression Model
+model_polynomial <- lm(RAINC ~ poly(TSK, 2) + poly(PSFC, 2) + poly(Q2, 2), data = data_weather)
+
+# Summary of the polynomial regression model
+summary(model_polynomial)
+```
+
+From the output of the non parametric tests carried out on the the variables, we come to the same conclusion that the p-value for the 2-meter specific humidity (Q2) indicates a very high statistical significance.
+
+
+
+
+
+
+
+# Machine Learning
+
+## Research Question 4
+
+Can a machine learning model be used to predict wind based on other weather variables such as wind speed, soil moisture, soil temperature and can future wind speed valued be determined?
+
+Firstly we have to determine which features to select. By examining the correlation matrix and heatmap, we can identify pairs of variables that are strongly correlated with each other.
+
+```{r}
+#Using a correlation heatmap to choose our features
+correlation_matrix <- cor(data_weather[c("TSK","PSFC", "Q2","RAINC", "RAINNC", "WIND_SPEED","TSLB", "SMOIS")])
+corrplot(correlation_matrix, method = "color")
+print(correlation_matrix)
+```
+
+From the result above, positive correlations are displayed in the blue color gradient, while negative correlations are displayed in brown. The stronger the correlation, the darker the color. It can be deduced that the "PSF" and "RAINC" variables gave a negative correlation. Therefore they would not be chosen as part of our features for prediction
+
+
+
+
+
+```{r}
+#Firstly we check whether linear regression would be suitable for this scenario
+data_sub <- data_weather[c("TSK", "Q2", "RAINNC", "WIND_SPEED","TSLB", "SMOIS")]
+
+glimpse(data_sub)
+```
+
+This is an extraction of the variables that would be used to build out the machine learning models. PSFC and RAINC were omitted as they gave a negative correlation.
+
+
+
+
+
+```{r}
+#Define the model
+Model_Wind <- WIND_SPEED ~ TSK + Q2+ RAINNC + TSLB + SMOIS
+
+#Fitting the model
+Linear_Wind <- lm(Model_Wind, data = data_sub)
+
+#Performing rainbow test
+rainbowTest <- raintest(Linear_Wind)
+
+#Checking the p-value
+rainbowTest$p.value
+```
+
+From the above the p-value is less than 0.05, this suggests the linear model does not capture the entire relationship, therefore we would be exploring other non-linear models.
+
+
+
+
+
+
+
+
+### Support Vector Regression
+
+ 
+
+```{r}
+glimpse(data_sub)
+```
+
+First our data is split into train and test sets. The model is fed the train set to learn from to then make on the test set.
+
+```{r}
+
+set.seed(123) #Ensuring reproducibility
+
+#Getting the split
+split = sample.split(data_sub$WIND_SPEED, SplitRatio = 2/3)
+
+#Dividing into train and test set
+train_set = subset(data_sub, split == TRUE)
+test_set = subset(data_sub, split == FALSE)
+
+```
+
+```{r}
+View(train_set)
+View(test_set)
+nrow(train_set)  #Dsiplay the number of rows the train set
+```
+
+```{r}
+#Display the number of rows in the test set
+nrow(test_set)
+```
+
+
+
+
+
+#### Feature Scaling
+
+  To ensure that the independent variables or features in a dataset are on a similar scale, a preprocessing technique called feature scaling is used in machine learning. This technique involves transforming the values of the features so that they fall within a range, which is often between 0 and 1 or with a mean of 0 and a standard deviation of 1.
+
+```{r}
+# Applying feature Scaling
+training_set = scale(train_set)
+testing_set = scale(test_set)
+
+
+#Building the model
+
+Svr_Wind <- svm(formula <- WIND_SPEED ~ ., data <- training_set, 
+                              type <- 'eps-regression')
+```
+
+From the code block above, the train and test set of the SVR is scaled. It requires scaling because it is sensitive to the scale of the input features.
+
+
+
+
+
+
+This involves testing the support vector regression model on the test set to see its predictions
+
+```{r}
+# Predict wind speed on testing data
+y_pred <- predict(Svr_Wind, testing_set)
+y_pred
+```
+
+```{r}
+#Changing the scaled train and test set to dataframes
+testing_set1 <- data.frame(testing_set)
+training_set1 <- data.frame(training_set)
+```
+
+These were converted to dataframes to make it easier to calculate the required evaluation metrics. Evaluation metrics serve as quantitative measures to assess the performance of machine learning models. They provide valuable insights into how well a model has learned from the data and its capability to make accurate predictions on new, unseen data.
+
+1.) Mean Squared Error (MSE): The average of the squared differences between the predicted and actual values. It measures the average squared deviation of the predictions from the actual values.
+
+2.) Mean Absolute Error (MAE): The average of the absolute differences between the predicted and actual values. It measures the average absolute deviation of the predictions from the actual values.
+
+3.) Root Mean Squared Error (RMSE): The square root of the MSE. It provides a measure of the typical error magnitude in the predictions.
+
+4.) R-squared (R²): The proportion of the variance in the target variable that is explained by the model. It measures the goodness of fit of the model to the data.
+
+```{r}
+# Calculate evaluation metrics
+mae_svr <- mean(abs(testing_set1$WIND_SPEED - y_pred))
+mse_svr <- mean((testing_set1$WIND_SPEED - y_pred)^2)
+rmse_svr <- sqrt(mean((testing_set1$WIND_SPEED - y_pred)^2))
+r2_svr <- cor(testing_set1$WIND_SPEED, y_pred)^2
+
+
+# Print the evaluation metrics
+print(paste("Mean Absolute Error (MAE):", mae_svr))
+print(paste("Mean Squared Error (MSE):", mse_svr))
+print(paste("Root Mean Squared Error (RMSE):", rmse_svr))
+print(paste("Rsquared (RMSE): ", r2_svr))
+```
+
+
+
+
+
+#### SVR Visualisation
+
+This is done to visually assess how the SVR model performed.
+
+```{r}
+
+#Create a scatterplot of actual vs predicted wind speeds
+ggplot(testing_set1, aes(x = WIND_SPEED, y = y_pred)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red") +  # Add diagonal line
+  labs(x = "Actual Wind Speed", y = "Predicted Wind Speed", title = "SVR Model: Actual vs Predicted Wind Speeds")
+```
+
+From the above plot. It can be seen that the model did not accurately capture the points as they do not fall along or close to the regression line.
+
+
+
+
+
+
+### Decision Tree Regression
+
+
+
+```{r}
+#Decision Tree doesn't require feature scaling
+
+#Building the model
+DT_Wind = rpart(formula = WIND_SPEED ~ .,  data = train_set,
+                  control = rpart.control(minsplit = 2))
+                 
+
+
+y_pred_DT <- predict(DT_Wind, test_set)
+y_pred_DT
+```
+
+```{r}
+# Calculate evaluation metrics
+mae_DT <- mean(abs(test_set$WIND_SPEED - y_pred_DT))
+mse_DT <- mean((test_set$WIND_SPEED - y_pred_DT)^2)
+rmse_DT <- sqrt(mean((test_set$WIND_SPEED - y_pred_DT)^2))
+r2_DT <- cor(test_set$WIND_SPEED, y_pred_DT)^2
+
+
+# Print the evaluation metrics
+print(paste("Mean Absolute Error (MAE):", mae_DT))
+print(paste("Mean Squared Error (MSE):", mse_DT))
+print(paste("Root Mean Squared Error (RMSE):", rmse_DT))
+print(paste("R Squared (R2): ", r2_DT))
+
+```
+
+
+
+
+
+#### Decision Tree Visualisation
+
+```{r}
+#Create a scatterplot of actual vs predicted wind speeds
+ggplot(test_set, aes(x = WIND_SPEED, y = y_pred_DT)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red") +  # Add diagonal line
+  labs(x = "Actual Wind Speed", y = "Predicted Wind Speed", title = "DT Model: Actual vs Predicted Wind Speeds")
+```
+
+As seen from the figure above, just like the SVR, its points do not fall along the regression line. From the plot, this is a poor performing model
+
+
+
+
+
+
+
+### Random Forest Regression
+
+
+```{r}
+set.seed(1234) #Ensures reproducibility
+RF_wind200 <-  randomForest(x = train_set,y = train_set$WIND_SPEED, ntree = 200)
+                         
+# Number of trees (500)
+RF_wind500 = randomForest(x = train_set, y = train_set$WIND_SPEED, ntree = 500)
+```
+
+```{r}
+#Testing the Random Forest Model on the test set
+y_pred_RF200 = predict(RF_wind200, test_set)
+y_pred_RF200
+View(test_set)
+```
+
+```{r}
+y_pred_RF500 <- predict(RF_wind500, test_set)
+y_pred_RF500
+```
+
+```{r}
+# Calculate evaluation metrics for n = 200
+mae_RF200 <- mean(abs(test_set$WIND_SPEED - y_pred_RF200))
+mse_RF200 <- mean((test_set$WIND_SPEED - y_pred_RF200)^2)
+rmse_RF200 <- sqrt(mean((test_set$WIND_SPEED - y_pred_RF200)^2))
+r2_RF200 <- cor(test_set$WIND_SPEED, y_pred_RF200)^2
+
+
+# Print the evaluation metrics for n = 200
+print(paste("Mean Absolute Error (MAE):", mae_RF200))
+print(paste("Mean Squared Error (MSE):", mse_RF200))
+print(paste("Root Mean Squared Error (RMSE):", rmse_RF200))
+print(paste("R Squared (R2): ", r2_RF200))
+```
+
+```{r}
+# Calculate evaluation metrics for n = 500
+mae_RF500 <- mean(abs(test_set$WIND_SPEED - y_pred_RF500))
+mse_RF500 <- mean((test_set$WIND_SPEED - y_pred_RF500)^2)
+rmse_RF500 <- sqrt(mean((test_set$WIND_SPEED - y_pred_RF500)^2))
+r2_RF500 <- cor(test_set$WIND_SPEED, y_pred_RF500)^2
+
+
+# Print the evaluation metrics for n = 500
+print(paste("Mean Absolute Error (MAE):", mae_RF500))
+print(paste("Mean Squared Error (MSE):", mse_RF500))
+print(paste("Root Mean Squared Error (RMSE):", rmse_RF500))
+print(paste("R Squared (R2): ", r2_RF500))
+```
+
+
+
+
+
+#### Visualisations for Random Forest Regression
+
+```{r}
+```
+
+```{r}
+ggplot(test_set, aes(x = WIND_SPEED, y = y_pred_RF200)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red") +  # Add diagonal line
+  labs(x = "Actual Wind Speed", y = "Predicted Wind Speed", title = "RF Model (Trees = 200): Actual vs Predicted Wind Speeds")
+```
+
+From the plot, the points on or around the regression line. This is the ideal requirement.
+
+
+
+
+
+
+
+```{r}
+ggplot(test_set, aes(x = WIND_SPEED, y = y_pred_RF500)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red") +  # Add diagonal line
+  labs(x = "Actual Wind Speed", y = "Predicted Wind Speed", title = "RF Model (Trees = 500): Actual vs Predicted Wind Speeds")
+
+```
+
+
+
+### Model Comaprisons
+
+This is done to compare the different models based on their evaluation metrics.
+
+```{r}
+# Create a dataframe with model names and evaluation metrics
+models <- c("SVR", "Decision Tree", "Random Forest")
+mse <- c(mse_svr, mse_DT,mse_RF200)  
+mae <- c(mae_svr, mae_DT, mae_RF200)  
+rmse <- c(rmse_svr, rmse_DT, rmse_RF200) 
+rsquared <- c(r2_svr, r2_DT, r2_RF200)  
+
+eval_df <- data.frame(Model = rep(models, each = 4),
+                   Metric = rep(c("MSE", "MAE", "RMSE", "R-squared"), times = 3),
+                   Value = c(mse, mae, rmse, rsquared))
+
+# Create a grouped bar plot
+ggplot(eval_df, aes(x = Model, y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Comparison of Model Evaluation Metrics",
+       x = "Model", y = "Value") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+From the graph, it can be confidently said that the best model is the Random Forest regression model.
+
+
+
+
+
+Creating a sample dataframe to test out the models
+```{r}
+
+TSK <- c(298.30, 297.70, 305.50, 295.30)
+Q2 <- c(0.011140, 0.003700, 0.007400, 0.004505)
+RAINNC <- c(0.1, 4.2, 5.5, 6.2)
+TSLB <- c(298.4, 283.50, 279.90, 295.60)
+SMOIS <- c(0.31320, 0.40060, 0.31980, 0.32470)
+WIND_SPEED <- c(5.5,6.5,4.2,3.5)
+Model_test <- data.frame(TSK,Q2,RAINNC,TSLB,SMOIS,WIND_SPEED)
+Test_prediction1 <- predict(Svr_Wind, Model_test)
+
+Test_prediction1
+View(Model_test)
+```
+
+```{r}
+Test_prediction2 <- predict(DT_Wind, Model_test)
+Test_prediction2
+```
+
+```{r}
+Test_prediction3 <- predict(RF_wind200, Model_test)
+Test_prediction3
+```
+
+
+
+
+
+
+
+## Research Question 5
+
+How can Surface temperature be predicted based on a combination of meteorological variables using machine learning techniques, given that Birmingham experiences the urban heat island effect and how does the predictive performance vary across different machine learning models?
+
+
+
+
+```{r}
+data_sub1 <- data_weather[c("TSK", "PSFC", "Q2", "RAINNC", "WIND_SPEED","TSLB")]
+glimpse(data_sub1)
+
+Model_PSFC <- PSFC ~ TSK + Q2+ RAINNC + WIND_SPEED + TSLB 
+
+#Fitting the model
+Linear_PSFC <- lm(Model_PSFC, data = data_sub1)
+
+raintest(Linear_PSFC)
+```
+
+
+
+### Support Vector Regression
+
+```{r}
+set.seed(123) #Ensuring reproducibility
+
+unique(colnames(data_weather))
+
+#Getting the split
+split1 = sample.split(data_sub1$TSK, SplitRatio = 0.8)
+
+#Dividing into train and test set
+train_set = subset(data_sub1, split == TRUE)
+test_set = subset(data_sub1, split == FALSE)
+```
+
+```{r}
+View(train_set)
+View(test_set)
+nrow(train_set)  #Dsiplay the number of rows the train set
+```
+
+```{r}
+# Applying feature Scaling
+training_set = scale(train_set)
+testing_set = scale(test_set)
+
+#Building the model
+
+Svr_TSK <- svm(formula <- TSK ~ ., data <- training_set, 
+                type <- 'eps-regression')
+
+# Predict wind speed on testing data
+y_pred <- predict(Svr_TSK, testing_set)
+y_pred
+
+
+
+#Changing the scaled train and test set to dataframes
+testing_set1 <- data.frame(testing_set)
+training_set1 <- data.frame(training_set)
+```
+
+```{r}
+# Calculate evaluation metrics
+mae_svr <- mean(abs(testing_set1$TSK - y_pred))
+mse_svr <- mean((testing_set1$TSK - y_pred)^2)
+rmse_svr <- sqrt(mean((testing_set1$TSK- y_pred)^2))
+r2_svr <- cor(testing_set1$TSK, y_pred)^2
+
+
+# Print the evaluation metrics
+print(paste("Mean Absolute Error (MAE):", mae_svr))
+print(paste("Mean Squared Error (MSE):", mse_svr))
+print(paste("Root Mean Squared Error (RMSE):", rmse_svr))
+print(paste("Rsquared (RMSE): ", r2_svr))
+```
+
+
+
+#### SVR Visualisation
+
+This is done to visually assess how the SVR model performed.
+
+```{r}
+
+#Create a scatterplot of actual vs predicted wind speeds
+ggplot(testing_set1, aes(x = TSK, y = y_pred)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red") +  # Add diagonal line
+  labs(x = "Actual Surface Temperature", y = "Predicted Surface Temperature", title = "SVR Model: Actual vs Predicted Surface Temperature")
+```
+
+From the plot above, it can be seen that the all points fell around the regression line.
+
+
+
+
+
+
+
+### Decision Tree Regression
+
+```{r}
+#Decision Tree doesn't require feature scaling
+
+#Building the model
+DT_TSK = rpart(formula = TSK ~ .,  data = train_set,
+                control = rpart.control(minsplit = 2))
+
+
+
+y_pred_DT <- predict(DT_TSK, test_set)
+y_pred_DT
+```
+
+```{r}
+# Calculate evaluation metrics
+mae_DT <- mean(abs(test_set$TSK - y_pred_DT))
+mse_DT <- mean((test_set$TSK - y_pred_DT)^2)
+rmse_DT <- sqrt(mean((test_set$TSK - y_pred_DT)^2))
+r2_DT <- cor(test_set$TSK, y_pred_DT)^2
+
+
+# Print the evaluation metrics
+print(paste("Mean Absolute Error (MAE):", mae_DT))
+print(paste("Mean Squared Error (MSE):", mse_DT))
+print(paste("Root Mean Squared Error (RMSE):", rmse_DT))
+print(paste("R Squared (R2): ", r2_DT))
+
+```
+
+
+
+
+
+
+#### Decision Tree Visualisation
+
+```{r}
+#Create a scatterplot of actual vs predicted wind speeds
+ggplot(test_set, aes(x = TSK, y = y_pred_DT)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red") +  # Add diagonal line
+  labs(x = "Actual Wind Speed", y = "Predicted Wind Speed", title = "DT Model: Actual vs Predicted Wind Speeds")
+```
+
+From the visualisation above, this is a not so good model.
+
+
+
+
+
+
+
+### Random Forest Regression
+
+```{r}
+set.seed(1234) #Ensures reproducibility
+RF_wind200 <-  randomForest(x = train_set,y = train_set$TSK, ntree = 200)
+
+
+#Testing the Random Forest Model on the test set
+y_pred_RF200 = predict(RF_wind200, test_set)
+y_pred_RF200
+
+
+```
+
+```{r}
+# Calculate evaluation metrics for n = 200
+mae_RF200 <- mean(abs(test_set$TSK - y_pred_RF200))
+mse_RF200 <- mean((test_set$TSK - y_pred_RF200)^2)
+rmse_RF200 <- sqrt(mean((test_set$TSK - y_pred_RF200)^2))
+r2_RF200 <- cor(test_set$TSK, y_pred_RF200)^2
+
+
+# Print the evaluation metrics for n = 200
+print(paste("Mean Absolute Error (MAE):", mae_RF200))
+print(paste("Mean Squared Error (MSE):", mse_RF200))
+print(paste("Root Mean Squared Error (RMSE):", rmse_RF200))
+print(paste("R Squared (R2): ", r2_RF200))
+```
+
+
+
+
+
+
+#### Visualisations for Random Forest Regression
+
+```{r}
+ggplot(test_set, aes(x = TSK, y = y_pred_RF200)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red") +  # Add diagonal line
+  labs(x = "Actual Wind Speed", y = "Predicted Wind Speed", title = "RF Model (Trees = 200): Actual vs Predicted Wind Speeds")
+```
+
+From the plot above, this is also a relatively good model
+
+
+
+
+
+
+### Model Comaprisons
+
+This is done to determine the best model
+
+```{r}
+# Create a dataframe with model names and evaluation metrics
+models <- c("SVR", "Decision Tree", "Random Forest")
+mse <- c(mse_svr, mse_DT,mse_RF200)  
+mae <- c(mae_svr, mae_DT, mae_RF200)  
+rmse <- c(rmse_svr, rmse_DT, rmse_RF200) 
+rsquared <- c(r2_svr, r2_DT, r2_RF200)  
+
+eval_df1 <- data.frame(Model = rep(models, each = 4),
+                      Metric = rep(c("MSE", "MAE", "RMSE", "R-squared"), times = 3),
+                      Value = c(mse, mae, rmse, rsquared))
+
+# Create a grouped bar plot
+ggplot(eval_df1, aes(x = Model, y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Comparison of Model Evaluation Metrics",
+       x = "Model", y = "Value") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+From the comparisons of the model, it cannot be outrightly decided what the best model is. The best model now is dependent on the evaluation metric that is under consideration, But overall, the Decision tree is seen as the worse model.
+
+
+
+
+
+
+
+# Time Series Analysis
+
+  Time series analysis involves analyzing data that has a time component using specialized tools and techniques.
+
+## Research Question 6
+
+How does surface temperature vary over time, given that is important to stakeholders in Birmingham. Are there any trends or patterns and can the surface temperature for the next 24-hour period be forecasted?
+
+```{r}
+str(data_weather)
+```
+
+```{r}
+class(data_weather)
+```
+
+```{r}
+#Getting the subset of our data required for the time series analysis
+
+Time_df <- data_weather[c("TSK", "DATETIME")]
+str(Time_df)
+class(Time_df)
+```
+
+```{r}
+#Converting the dataframe to a time series class
+
+
+
+
+ts_data <- ts(Time_df$TSK,start = 1,
+              frequency = 8)
+plot(ts_data)
+
+```
+
+The plot above shows the trend of the surface tempearture across the 30 day time period.
+
+
+
+
+Seasonal cycles, in the context of time series analysis, refer to recurring patterns in data that are tied to specific time periods within a year.
+
+```{r}
+#Checking for seasonality
+plot(decompose(ts_data))
+
+```
+
+From the visualisation, the time series data displays a seasonal patttern.
+
+
+
+
+
+
+Stationarity is a feature of time series data whereby its statistical attributes, such as mean, variance, and autocorrelation, remain consistent across time. In other words, a time series can be considered stationary if its statistical properties do not change with time.
+
+To check for stationarity we use the Augmented Dickey-Fuller Test (ADF)
+
+```{r}
+#Checking for Stationarity
+adf.test(ts_data)
+```
+
+The p-value is greater than 0.05. This means we fail to reject the null hypothesis (H0). The null hypothesis is accepted meaning the data is non-stationary. But the time series needs to be sationary to carry out time series modelling. To rectify that we carry out differencing.
+
+Differencing is a techniques that is used to transform a non-staionary time series to a stationary one.
+
+```{r}
+#Implementing Differencing
+ndiffs(ts_data) # No of differences required to make the data stationary
+
+nsdiffs(ts_data) #No of seasonal diiferences required to make the data stationary
+```
+
+```{r}
+y1 <- diff(ts_data, lag = 8) # Implementing one seasonal differencing
+
+adf.test(y1)
+```
+
+The p-values is less than 0.05. The null hypothesis is rejected. The data is now stationary.
+
+Now we plot the differenced time series data to visually assess its stationarity.
+
+```{r}
+plot(y1)
+```
+
+
+
+
+
+### Seasonal ARIMA
+
+Since the data is seasonal, we would use seasonal ARIMA
+
+
+
+```{r}
+#Splitting my time series data
+split_ratio <- 0.8
+
+# Calculate the number of observations for the training set
+train_size <- floor(length(y1) * split_ratio)
+
+# Split the data using indexing
+train_data <- y1[1:train_size]
+test_data <- y1[(train_size + 1):length(y1)]
+
+
+length(train_data)
+
+length(test_data)
+```
+
+
+
+#### ACF and PACF Plot
+
+
+
+```{r}
+#Autocorrelation Function Plot
+acfplot <- acf(train_data)
+```
+
+
+
+From the ACF plot, we can see that the lag spikes starts off strongly then gradually reduces to zero. There are four positive lag spikes that are beyond the reference blue dashed line. This means that there is a strong autocorrelation. All these spikes can serve as the q value.
+
+```{r}
+#Partial Autocorrelation Plot
+pacfplot <- pacf(train_data)
+
+```
+
+From the PACF plot, there is lag spike at lag 1 then another at lag 2. It shows the order of the Auto-Regressive terms.
+
+
+
+
+
+```{r}
+#Fitting the seasonal arima model
+sarima_model <- auto.arima(train_data, trace= TRUE, seasonal=TRUE, stepwise = FALSE, approximation = FALSE, allowdrift = FALSE)
+sarima_model
+
+forecast1 <- forecast(sarima_model, h=length(test_data))
+forecast1
+
+
+```
+
+The ARIMA(1,0,3) is chosen as the best model because it has the lowest AIC value. AIC stands for Akaike Information Criterion. It's a statistical method used for model selection. Models with lower AIC values are generally considered preferable. They achieve a good balance between fitting the data and being not overly complex.
+
+
+
+
+
+
+```{r}
+#Checking accuracy
+sarima_acc <- accuracy(forecast1, test_data)
+sarima_acc
+```
+
+```{r}
+summary(sarima_model)
+```
+
+The "accuracy" and "summary" commands displays the various evaluation metrics of the model. This includes, Mean Absolute Error, Root Mean Squared Error etc.
+
+```{r}
+#Checking the residuala
+checkresiduals(sarima_model)
+```
+
+After checking the residuals, a p-value of less than 0.05 was obtained, indicating the possible presence of autocorrelation (dependence) in the residuals. This suggests that the null hypothesis (no autocorrelation) can be rejected, meaning there is evidence of remaining autocorrelation in the residuals.
+
+After analysing the ACF plot, it is evident that there is still a presence of two single significant spike. This indicates that there is still autocorrelation in the errors. Essentially, it means that the model is not making use of all the available data points.
+
+To rectify this, we will conduct another seasonal ARIMA on the entire time series data instead of splitting it into train and test data.
+
+
+```{r}
+acf(y1)
+```
+
+```{r}
+pacf(y1)
+```
+
+```{r}
+#Fitting a new SARIMA model
+new_sarima <-  auto.arima(y1, stepwise = FALSE, approximation = FALSE)
+```
+
+```{r}
+summary(new_sarima)
+```
+
+Although the the AIC value is just a little higher than the first SARIMA, it doesn't mean its a worse model. To determine its validity, we check the residuals.
+
+```{r}
+checkresiduals(new_sarima)
+```
+
+From the Ljung-Box test, the p-value is greater that 0.05. This suggests a weaker presence of autocorrelation compared to a p-value less than 0.05.
+
+After analysing the residuals, it is evident that the ACF displays only one significant lag spike beyond the reference line. This indicates that the model is utilising most of the data points.
+
+
+
+
+
+
+```{r}
+#Forecasting
+plot(forecast(new_sarima, h = 10))
+```
+
+
+
+
+# Limitations of the Analysis
+
+  The most significant limitation arising from this analysis is the restricted number of observations. A small dataset presents substantial challenges, especially when employing machine learning techniques and time series forecasting. When there are only a few data points, the machine learning model may become too focused on the specific details of the training data. This can result in overfitting, where the model works well with the training data but struggles to accurately predict outcomes with new, unseen data.
+
+
+
+
+
+
+
+# Discussion and Conclusion
+
+  After completing the analysis, we discovered some interesting insights and patterns. For example, our analysis revealed that an increase in humidity led to higher rainfall, while surface pressure and temperature exhibited an inverse relationship. All of these findings were obtained through simple statistical tests in multivariate analysis. Improving on our analysis, we used machine learning techniques and algorithms to uncover hidden patterns and make predictions based on historical data. By training models on past weather observations, we developed predictive capabilities that can forecast future conditions with reasonable accuracy. These machine learning models are valuable tools for stakeholders, providing insights into potential weather events and supporting decision-making processes
