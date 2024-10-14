@@ -1,5 +1,5 @@
 # R-Studio-Project
-Birmingham's Climate Analysis with Time series analysis using R
+Analysing Birmingham's climate through Time series analysis and Machine Learning 
 
 In this project, we will provide a thorough analysis of weather data for Birmingham, a city in the United Kingdom, focusing on various meteorological parameters recorded over a one-month period. 
 
